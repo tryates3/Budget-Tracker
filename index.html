@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="My Budget" />
+  <title>My Budget</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { background: #0f1117; font-family: -apple-system, "Segoe UI", sans-serif; color: #f0f0f0; }
+    input, select, button { font-family: inherit; }
+    select option { background: #252840; color: #fff; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useEffect, createElement: h } = React;
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const COLOR_PALETTE = ["#e07b54","#e8b84b","#5b8dee","#7dcfb6","#e27ba0","#a78bfa","#4ade80","#94a3b8","#f97316","#06b6d4","#ec4899","#84cc16","#f59e0b","#8b5cf6","#10b981"];
+
+function getDefaultColor(category) {
+  const map = { Housing:"#e07b54", Food:"#e8b84b", Transport:"#5b8dee", Utilities:"#7dcfb6", Health:"#e27ba0", Entertainment:"#a78bfa", Savings:"#4ade80", Other:"#94a3b8" };
+  return map[category] || COLOR_PALETTE[Math.abs([...category].reduce((a,c)=>a+c.charCodeAt(0),0)) % COLOR_PALETTE.length];
+}
+
+const defaultBills = [
+  { id:1, name:"Rent", amount:1200, dueDay:1, category:"Housing", paid:false },
+  { id:2, name:"Internet", amount:60, dueDay:20, category:"Utilities", paid:false },
+  { id:3, name:"Reliant Electricity", amount:408.29, dueDay:13, category:"Utilities", paid:false, source:"email" },
+  { id:4, name:"Cash App Borrow", amount:315, dueDay:29, category:"Other", paid:false, source:"email" },
+  { id:5, name:"TurboTax", amount:84.21, dueDay:15, category:"Other", paid:false, source:"email" },
+  { id:6, name:"Discover Card", amount:0, dueDay:4, category:"Other", paid:false, source:"email", amountUnknown:true },
+  { id:7, name:"Academy Sports Credit Card", amount:0, dueDay:12, category:"Other", paid:false, source:"email", amountUnknown:true, pastDue:true },
+  { id:8, name:"Mariner Finance", amount:0, dueDay:5, category:"Other", paid:false, source:"email", amountUnknown:true },
+];
+
+const lastEmailScan = "May 15, 2026";
+const defaultIncome = 3500;
+
+const defaultBudgetItems = [
+  { id:1, category:"Housing", allocated:1200 },
+  { id:2, category:"Food", allocated:400 },
+  { id:3, category:"Transport", allocated:200 },
+  { id:4, category:"Utilities", allocated:150 },
+  { id:5, category:"Health", allocated:100 },
+  { id:6, category:"Entertainment", allocated:100 },
+  { id:7, category:"Savings", allocated:300 },
+];
+
+function loadFromStorage(key, fallback) {
+  try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : fallback; } catch { return fallback; }
+}
+function saveToStorage(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+function formatCurrency(n) {
+  return "$" + Number(n||0).toLocaleString("en-US", { minimumFractionDigits:2, maximumFractionDigits:2 });
+}
+function getDaysUntilDue(dueDay) {
+  const today = new Date();
+  const due = new Date(today.getFullYear(), today.getMonth(), dueDay);
+  if (due < today) due.setMonth(due.getMonth() + 1);
+  return Math.ceil((due - today) / (1000*60*60*24));
+}
+function getDueDateString(dueDay) {
+  const today = new Date();
+  const due = new Date(today.getFullYear(), today.getMonth(), dueDay);
+  if (due < today) due.setMonth(due.getMonth() + 1);
+  return String(due.getMonth()+1).padStart(2,"0") + "/" + String(due.getDate()).padStart(2,"0") + "/" + String(due.getFullYear()).slice(2);
+}
+
+const inputStyle = { width:"100%", background:"#252840", border:"1px solid #3d4175", borderRadius:8, color:"#fff", padding:"10px 12px", fontSize:14, boxSizing:"border-box", outline:"none" };
+const labelStyle = { fontSize:11, color:"#6b7280", fontWeight:600, marginBottom:4, textTransform:"uppercase", letterSpacing:0.5, display:"block" };
+
+function App() {
+  const [tab, setTab] = useState("dashboard");
+  const [income, setIncome] = useState(() => loadFromStorage("budget_income", defaultIncome));
+  const [editingIncome, setEditingIncome] = useState(false);
+  const [incomeInput, setIncomeInput] = useState(() => loadFromStorage("budget_income", defaultIncome));
+  const [bills, setBills] = useState(() => loadFromStorage("budget_bills", defaultBills));
+  const [budgetItems, setBudgetItems] = useState(() => loadFromStorage("budget_items", defaultBudgetItems));
+  const [showAddBill, setShowAddBill] = useState(false);
+  const [showAddBudget, setShowAddBudget] = useState(false);
+  const [newBill, setNewBill] = useState({ name:"", amount:"", dueDay:"", category:"" });
+  const [newBudget, setNewBudget] = useState({ category:"", allocated:"", color:COLOR_PALETTE[0] });
+  const [editingBillId, setEditingBillId] = useState(null);
+  const [editingBill, setEditingBill] = useState(null);
+  const [editingBudgetId, setEditingBudgetId] = useState(null);
+  const [editingBudgetItem, setEditingBudgetItem] = useState(null);
+
+  useEffect(() => { saveToStorage("budget_bills", bills); }, [bills]);
+  useEffect(() => { saveToStorage("budget_income", income); }, [income]);
+  useEffect(() => { saveToStorage("budget_items", budgetItems); }, [budgetItems]);
+
+  const allCategories = [...new Set(budgetItems.map(b => b.category))].sort();
+  function getItemColor(item) { return item.color || getDefaultColor(item.category); }
+  function getCategoryColor(cat) { const f = budgetItems.find(b => b.category===cat); return f ? getItemColor(f) : getDefaultColor(cat); }
+
+  const totalAllocated = budgetItems.reduce((s,b) => s+Number(b.allocated), 0);
+  const totalBills = bills.reduce((s,b) => s+Number(b.amount), 0);
+  const paidTotal = bills.filter(b=>b.paid).reduce((s,b) => s+Number(b.amount), 0);
+  const remaining = income - totalAllocated;
+  const upcomingBills = bills.filter(b=>!b.paid).sort((a,b) => getDaysUntilDue(a.dueDay)-getDaysUntilDue(b.dueDay));
+
+  function togglePaid(id) { setBills(bills.map(b => b.id===id ? {...b,paid:!b.paid} : b)); }
+  function deleteBill(id) { setBills(bills.filter(b => b.id!==id)); }
+  function deleteBudget(id) { setBudgetItems(budgetItems.filter(b => b.id!==id)); }
+
+  function addBill() {
+    if (!newBill.name||!newBill.amount||!newBill.dueDay) return;
+    setBills([...bills, {...newBill, id:Date.now(), amount:Number(newBill.amount), dueDay:Number(newBill.dueDay), paid:false}]);
+    setNewBill({ name:"", amount:"", dueDay:"", category:budgetItems[0]?.category||"" });
+    setShowAddBill(false);
+  }
+  function addBudget() {
+    if (!newBudget.category||!newBudget.allocated) return;
+    setBudgetItems([...budgetItems, { id:Date.now(), category:newBudget.category.trim(), allocated:Number(newBudget.allocated), color:newBudget.color }]);
+    setNewBudget({ category:"", allocated:"", color:COLOR_PALETTE[0] });
+    setShowAddBudget(false);
+  }
+  function startEditBill(bill) { setEditingBillId(bill.id); setEditingBill({...bill, amount:String(bill.amount), dueDay:String(bill.dueDay)}); }
+  function saveEditBill() {
+    if (!editingBill.name||!editingBill.dueDay) return;
+    const amt = Number(editingBill.amount);
+    const stillUnknown = editingBill.amountUnknown && (!editingBill.amount||amt===0);
+    setBills(bills.map(b => b.id===editingBillId ? {...editingBill, amount:amt, dueDay:Number(editingBill.dueDay), amountUnknown:stillUnknown} : b));
+    setEditingBillId(null); setEditingBill(null);
+  }
+  function startEditBudget(item) { setEditingBudgetId(item.id); setEditingBudgetItem({...item, allocated:String(item.allocated)}); }
+  function saveEditBudget() {
+    if (!editingBudgetItem.category||!editingBudgetItem.allocated) return;
+    setBudgetItems(budgetItems.map(b => b.id===editingBudgetId ? {...editingBudgetItem, allocated:Number(editingBudgetItem.allocated)} : b));
+    setEditingBudgetId(null); setEditingBudgetItem(null);
+  }
+
+  const today = new Date();
+
+  // ---- RENDER HELPERS ----
+  function ColorPicker(selected, onChange) {
+    return h("div", { style:{ display:"flex", flexWrap:"wrap", gap:8 } },
+      ...COLOR_PALETTE.map(c => h("div", { key:c, onClick:()=>onChange(c), style:{ width:24, height:24, borderRadius:"50%", background:c, cursor:"pointer", border: selected===c ? "3px solid #fff" : "3px solid transparent", boxSizing:"border-box" } }))
+    );
+  }
+
+  function LabeledInput(label, key, type, placeholder, value, onChange) {
+    return h("div", { style:{ marginBottom:10 } },
+      h("label", { style:labelStyle }, label),
+      h("input", { type, placeholder, value, onChange: e=>onChange(e.target.value), style:inputStyle })
+    );
+  }
+
+  function LabeledSelect(label, value, onChange, options) {
+    return h("div", { style:{ marginBottom:12 } },
+      h("label", { style:labelStyle }, label),
+      h("select", { value, onChange: e=>onChange(e.target.value), style:inputStyle },
+        ...options.map(o => h("option", { key:o }, o))
+      )
+    );
+  }
+
+  function SaveCancelRow(onSave, onCancel) {
+    return h("div", { style:{ display:"flex", gap:8 } },
+      h("button", { onClick:onSave, style:{ flex:1, background:"#5b8dee", border:"none", borderRadius:10, color:"#fff", padding:"10px", fontWeight:600, cursor:"pointer" } }, "Save"),
+      h("button", { onClick:onCancel, style:{ flex:1, background:"#252840", border:"none", borderRadius:10, color:"#94a3b8", padding:"10px", cursor:"pointer" } }, "Cancel")
+    );
+  }
+
+  // ---- DASHBOARD ----
+  const dashboard = h("div", null,
+    h("div", { style:{ fontSize:13, fontWeight:600, color:"#6b7280", marginBottom:12, textTransform:"uppercase", letterSpacing:1 } }, "Bills This Month"),
+    h("div", { style:{ background:"#1e2133", borderRadius:16, overflow:"hidden", marginBottom:20 } },
+      h("div", { style:{ display:"flex", justifyContent:"space-between", padding:"14px 16px", borderBottom:"1px solid #252840" } },
+        h("span", { style:{ color:"#4ade80", fontWeight:600 } }, formatCurrency(paidTotal)+" paid"),
+        h("span", { style:{ color:"#f87171", fontWeight:600 } }, formatCurrency(totalBills-paidTotal)+" remaining")
+      ),
+      ...upcomingBills.slice(0,4).map(bill => {
+        const days = getDaysUntilDue(bill.dueDay);
+        return h("div", { key:bill.id, style:{ display:"flex", alignItems:"center", gap:12, padding:"14px 16px", borderBottom:"1px solid #1a1d2e" } },
+          h("div", { style:{ width:10, height:10, borderRadius:"50%", background:getCategoryColor(bill.category), flexShrink:0 } }),
+          h("div", { style:{ flex:1 } },
+            h("div", { style:{ fontWeight:600, fontSize:14 } }, bill.name),
+            h("div", { style:{ fontSize:11, color:days<=3?"#f87171":"#6b7280" } }, getDueDateString(bill.dueDay)+" · "+days+" day"+(days!==1?"s":"")+" away")
+          ),
+          h("div", { style:{ fontWeight:700 } }, formatCurrency(bill.amount)),
+          h("button", { onClick:()=>togglePaid(bill.id), style:{ background:"#252840", border:"none", borderRadius:8, padding:"6px 10px", color:"#4ade80", cursor:"pointer", fontSize:13 } }, "Pay")
+        );
+      }),
+      upcomingBills.length===0 && h("div", { style:{ padding:20, textAlign:"center", color:"#4ade80" } }, "🎉 All bills paid!")
+    ),
+    h("div", { style:{ fontSize:13, fontWeight:600, color:"#6b7280", marginBottom:12, textTransform:"uppercase", letterSpacing:1 } }, "Budget Breakdown"),
+    h("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
+      ...budgetItems.map(item => {
+        const pct = income>0 ? Math.min(100,(item.allocated/income)*100) : 0;
+        return h("div", { key:item.id, style:{ background:"#1e2133", borderRadius:12, padding:"12px 16px" } },
+          h("div", { style:{ display:"flex", justifyContent:"space-between", marginBottom:8 } },
+            h("span", { style:{ fontWeight:600, fontSize:14 } }, item.category),
+            h("span", { style:{ fontWeight:700, color:getItemColor(item) } }, formatCurrency(item.allocated))
+          ),
+          h("div", { style:{ background:"#252840", borderRadius:99, height:4 } },
+            h("div", { style:{ width:pct+"%", height:"100%", background:getItemColor(item), borderRadius:99 } })
+          ),
+          h("div", { style:{ fontSize:10, color:"#6b7280", marginTop:4 } }, pct.toFixed(1)+"% of income")
+        );
+      })
+    )
+  );
+
+  // ---- BILLS TAB ----
+  const billsList = [...bills].sort((a,b)=>a.dueDay-b.dueDay).map(bill => {
+    const days = getDaysUntilDue(bill.dueDay);
+    const urgent = !bill.paid && days<=3;
+    const isPastDue = bill.pastDue;
+    if (editingBillId===bill.id) return h("div", { key:bill.id, style:{ background:"#1e2133", borderRadius:14, padding:"14px 16px", border:"1px solid #3d4175" } },
+      h("div", { style:{ fontSize:13, fontWeight:700, marginBottom:12, color:"#a78bfa" } }, "Edit Bill"),
+      LabeledInput("Bill Name","name","text","e.g. Netflix", editingBill.name, v=>setEditingBill({...editingBill,name:v})),
+      LabeledInput("Amount ($)","amount","number","0.00", editingBill.amount, v=>setEditingBill({...editingBill,amount:v})),
+      LabeledInput("Due Day of Month","dueDay","number","1 – 31", editingBill.dueDay, v=>setEditingBill({...editingBill,dueDay:v})),
+      LabeledSelect("Category", editingBill.category, v=>setEditingBill({...editingBill,category:v}), allCategories),
+      SaveCancelRow(saveEditBill, ()=>{ setEditingBillId(null); setEditingBill(null); })
+    );
+    return h("div", { key:bill.id, style:{ background:bill.paid?"#161a28":"#1e2133", borderRadius:14, padding:"14px 16px", border:(urgent||isPastDue)?"1px solid #f8717140":bill.source==="email"?"1px solid #3d417540":"1px solid transparent", opacity:bill.paid?0.6:1 } },
+      h("div", { style:{ display:"flex", alignItems:"center", gap:12 } },
+        h("div", { style:{ width:12, height:12, borderRadius:"50%", background:getCategoryColor(bill.category), flexShrink:0 } }),
+        h("div", { style:{ flex:1 } },
+          h("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center" } },
+            h("span", { style:{ fontWeight:700, fontSize:15, textDecoration:bill.paid?"line-through":"none" } },
+              bill.name, bill.source==="email" && h("span", { style:{ fontSize:10, color:"#a78bfa", marginLeft:6 } }, "📧")
+            ),
+            h("span", { style:{ fontWeight:700, fontSize:15, color:bill.amountUnknown?"#f87171":"inherit" } },
+              bill.amountUnknown ? "? Check email" : formatCurrency(bill.amount)
+            )
+          ),
+          h("div", { style:{ fontSize:12, color:(urgent||isPastDue)?"#f87171":"#6b7280", marginTop:2 } },
+            bill.paid?"✓ Paid":isPastDue?"⚠️ PAST DUE":(getDueDateString(bill.dueDay)+" · "+days+" day"+(days!==1?"s":"")+" away")+" · "+bill.category
+          )
+        )
+      ),
+      h("div", { style:{ display:"flex", gap:8, marginTop:10 } },
+        h("button", { onClick:()=>togglePaid(bill.id), style:{ flex:1, padding:"8px 0", borderRadius:8, border:"none", cursor:"pointer", fontWeight:600, fontSize:12, background:bill.paid?"#252840":"#4ade8020", color:bill.paid?"#94a3b8":"#4ade80" } }, bill.paid?"Mark Unpaid":"Mark Paid ✓"),
+        h("button", { onClick:()=>startEditBill(bill), style:{ padding:"8px 14px", borderRadius:8, border:"none", cursor:"pointer", background:"#3d417520", color:"#a78bfa", fontSize:12 } }, "Edit"),
+        h("button", { onClick:()=>deleteBill(bill.id), style:{ padding:"8px 14px", borderRadius:8, border:"none", cursor:"pointer", background:"#f8717120", color:"#f87171", fontSize:12 } }, "Delete")
+      )
+    );
+  });
+
+  const billsTab = h("div", null,
+    h("div", { style:{ background:"#1a1d2e", border:"1px solid #3d4175", borderRadius:12, padding:"10px 14px", marginBottom:14, display:"flex", justifyContent:"space-between", alignItems:"center" } },
+      h("div", null,
+        h("div", { style:{ fontSize:12, color:"#a78bfa", fontWeight:600 } }, "📧 Gmail Scan"),
+        h("div", { style:{ fontSize:11, color:"#6b7280", marginTop:2 } }, "Last scanned: "+lastEmailScan+" · Auto-scans Tue & Fri")
+      ),
+      h("div", { style:{ fontSize:10, color:"#4ade80", fontWeight:600 } }, "Active ✓")
+    ),
+    h("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 } },
+      h("div", { style:{ fontSize:13, fontWeight:600, color:"#6b7280", textTransform:"uppercase", letterSpacing:1 } }, "All Bills"),
+      h("button", { onClick:()=>{ setNewBill(b=>({...b,category:budgetItems[0]?.category||""})); setShowAddBill(!showAddBill); }, style:{ background:"#5b8dee", border:"none", borderRadius:10, color:"#fff", padding:"8px 14px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "+ Add Bill")
+    ),
+    showAddBill && h("div", { style:{ background:"#1e2133", borderRadius:16, padding:16, marginBottom:16, border:"1px solid #3d4175" } },
+      h("div", { style:{ fontSize:13, fontWeight:700, marginBottom:12 } }, "New Bill"),
+      LabeledInput("Bill Name","name","text","e.g. Netflix", newBill.name, v=>setNewBill({...newBill,name:v})),
+      LabeledInput("Amount ($)","amount","number","0.00", newBill.amount, v=>setNewBill({...newBill,amount:v})),
+      LabeledInput("Due Day of Month","dueDay","number","1 – 31", newBill.dueDay, v=>setNewBill({...newBill,dueDay:v})),
+      LabeledSelect("Category", newBill.category, v=>setNewBill({...newBill,category:v}), allCategories),
+      h("div", { style:{ display:"flex", gap:8 } },
+        h("button", { onClick:addBill, style:{ flex:1, background:"#5b8dee", border:"none", borderRadius:10, color:"#fff", padding:"10px", fontWeight:600, cursor:"pointer" } }, "Add"),
+        h("button", { onClick:()=>setShowAddBill(false), style:{ flex:1, background:"#252840", border:"none", borderRadius:10, color:"#94a3b8", padding:"10px", cursor:"pointer" } }, "Cancel")
+      )
+    ),
+    h("div", { style:{ display:"flex", flexDirection:"column", gap:10 } }, ...billsList)
+  );
+
+  // ---- BUDGET TAB ----
+  const budgetList = budgetItems.map(item => {
+    const pct = income>0 ? Math.min(100,(item.allocated/income)*100) : 0;
+    if (editingBudgetId===item.id) return h("div", { key:item.id, style:{ background:"#1e2133", borderRadius:14, padding:"14px 16px", border:"1px solid #3d4175" } },
+      h("div", { style:{ fontSize:13, fontWeight:700, marginBottom:12, color:"#a78bfa" } }, "Edit Category"),
+      LabeledInput("Category Name","category","text","e.g. Subscriptions", editingBudgetItem.category, v=>setEditingBudgetItem({...editingBudgetItem,category:v})),
+      LabeledInput("Monthly Amount ($)","allocated","number","0.00", editingBudgetItem.allocated, v=>setEditingBudgetItem({...editingBudgetItem,allocated:v})),
+      h("div", { style:{ marginBottom:14 } },
+        h("label", { style:labelStyle }, "Color"),
+        ColorPicker(editingBudgetItem.color||getDefaultColor(editingBudgetItem.category), c=>setEditingBudgetItem({...editingBudgetItem,color:c}))
+      ),
+      SaveCancelRow(saveEditBudget, ()=>{ setEditingBudgetId(null); setEditingBudgetItem(null); })
+    );
+    return h("div", { key:item.id, style:{ background:"#1e2133", borderRadius:14, padding:"14px 16px" } },
+      h("div", { style:{ display:"flex", justifyContent:"space-between", marginBottom:8 } },
+        h("div", { style:{ display:"flex", alignItems:"center", gap:8 } },
+          h("div", { style:{ width:10, height:10, borderRadius:"50%", background:getItemColor(item) } }),
+          h("span", { style:{ fontWeight:600 } }, item.category)
+        ),
+        h("div", { style:{ display:"flex", alignItems:"center", gap:10 } },
+          h("span", { style:{ fontWeight:700, color:getItemColor(item) } }, formatCurrency(item.allocated)),
+          h("button", { onClick:()=>startEditBudget(item), style:{ background:"#3d417520", border:"none", borderRadius:6, color:"#a78bfa", cursor:"pointer", padding:"3px 8px", fontSize:12, fontWeight:600 } }, "Edit"),
+          h("button", { onClick:()=>deleteBudget(item.id), style:{ background:"transparent", border:"none", color:"#6b7280", cursor:"pointer", padding:0, fontSize:16 } }, "×")
+        )
+      ),
+      h("div", { style:{ background:"#252840", borderRadius:99, height:5 } },
+        h("div", { style:{ width:pct+"%", height:"100%", background:getItemColor(item), borderRadius:99 } })
+      ),
+      h("div", { style:{ fontSize:11, color:"#6b7280", marginTop:4 } }, pct.toFixed(1)+"% of income")
+    );
+  });
+
+  const budgetTab = h("div", null,
+    h("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 } },
+      h("div", { style:{ fontSize:13, fontWeight:600, color:"#6b7280", textTransform:"uppercase", letterSpacing:1 } }, "Budget Categories"),
+      h("button", { onClick:()=>setShowAddBudget(!showAddBudget), style:{ background:"#5b8dee", border:"none", borderRadius:10, color:"#fff", padding:"8px 14px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "+ Add")
+    ),
+    h("div", { style:{ background:remaining>=0?"#14281e":"#281414", border:"1px solid "+(remaining>=0?"#4ade8040":"#f8717140"), borderRadius:14, padding:"14px 16px", marginBottom:16 } },
+      h("div", { style:{ display:"flex", justifyContent:"space-between" } },
+        h("span", { style:{ fontWeight:600 } }, "Unallocated"),
+        h("span", { style:{ fontWeight:700, color:remaining>=0?"#4ade80":"#f87171" } }, formatCurrency(remaining))
+      ),
+      h("div", { style:{ fontSize:12, color:"#6b7280", marginTop:4 } }, remaining>=0?"Available to assign to categories":"Over budget — reduce some categories")
+    ),
+    showAddBudget && h("div", { style:{ background:"#1e2133", borderRadius:16, padding:16, marginBottom:16, border:"1px solid #3d4175" } },
+      h("div", { style:{ fontSize:13, fontWeight:700, marginBottom:12 } }, "New Category"),
+      LabeledInput("Category Name","category","text","e.g. Subscriptions", newBudget.category, v=>setNewBudget({...newBudget,category:v})),
+      LabeledInput("Monthly Amount ($)","allocated","number","0.00", newBudget.allocated, v=>setNewBudget({...newBudget,allocated:v})),
+      h("div", { style:{ marginBottom:14 } },
+        h("label", { style:labelStyle }, "Color"),
+        ColorPicker(newBudget.color, c=>setNewBudget({...newBudget,color:c}))
+      ),
+      h("div", { style:{ display:"flex", gap:8 } },
+        h("button", { onClick:addBudget, style:{ flex:1, background:"#5b8dee", border:"none", borderRadius:10, color:"#fff", padding:"10px", fontWeight:600, cursor:"pointer" } }, "Save"),
+        h("button", { onClick:()=>setShowAddBudget(false), style:{ flex:1, background:"#252840", border:"none", borderRadius:10, color:"#94a3b8", padding:"10px", cursor:"pointer" } }, "Cancel")
+      )
+    ),
+    h("div", { style:{ display:"flex", flexDirection:"column", gap:10 } }, ...budgetList)
+  );
+
+  // ---- MAIN RENDER ----
+  return h("div", { style:{ minHeight:"100vh", background:"#0f1117", paddingBottom:80 } },
+    h("div", { style:{ background:"linear-gradient(135deg, #1a1d2e 0%, #16192b 100%)", borderBottom:"1px solid #252840", padding:"44px 24px 20px", position:"sticky", top:0, zIndex:10 } },
+      h("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" } },
+        h("div", null,
+          h("div", { style:{ fontSize:11, letterSpacing:3, color:"#6b7280", textTransform:"uppercase", marginBottom:4 } }, MONTHS[today.getMonth()]+" "+today.getFullYear()),
+          h("div", { style:{ fontSize:26, fontWeight:700, letterSpacing:-0.5 } }, "My Budget")
+        ),
+        h("div", { style:{ textAlign:"right" } },
+          h("div", { style:{ fontSize:11, color:"#6b7280", marginBottom:2 } }, "Monthly Income"),
+          editingIncome
+            ? h("div", { style:{ display:"flex", gap:6 } },
+                h("input", { value:incomeInput, onChange:e=>setIncomeInput(e.target.value), style:{ width:90, background:"#252840", border:"1px solid #3d4175", borderRadius:8, color:"#fff", padding:"4px 8px", fontSize:16 }, autoFocus:true }),
+                h("button", { onClick:()=>{ setIncome(Number(incomeInput)); setEditingIncome(false); }, style:{ background:"#5b8dee", border:"none", borderRadius:8, color:"#fff", padding:"4px 10px", cursor:"pointer", fontSize:16 } }, "✓")
+              )
+            : h("div", { onClick:()=>{ setIncomeInput(income); setEditingIncome(true); }, style:{ fontSize:22, fontWeight:700, color:"#4ade80", cursor:"pointer" } }, formatCurrency(income))
+        )
+      ),
+      h("div", { style:{ display:"flex", gap:12, marginTop:20 } },
+        ...[{label:"Allocated",val:totalAllocated,color:"#5b8dee"},{label:"Bills",val:totalBills,color:"#e07b54"},{label:"Free",val:remaining,color:remaining>=0?"#4ade80":"#f87171"}].map(s =>
+          h("div", { key:s.label, style:{ flex:1, background:"#1e2133", borderRadius:12, padding:"10px 12px" } },
+            h("div", { style:{ fontSize:10, color:"#6b7280", textTransform:"uppercase", letterSpacing:1 } }, s.label),
+            h("div", { style:{ fontSize:16, fontWeight:700, color:s.color, marginTop:2 } }, formatCurrency(s.val))
+          )
+        )
+      ),
+      h("div", { style:{ marginTop:14, background:"#252840", borderRadius:99, height:6, overflow:"hidden" } },
+        h("div", { style:{ width:Math.min(100,(totalAllocated/income)*100)+"%", height:"100%", background:"linear-gradient(90deg, #5b8dee, #a78bfa)", borderRadius:99, transition:"width 0.4s ease" } })
+      ),
+      h("div", { style:{ display:"flex", justifyContent:"space-between", marginTop:4, fontSize:10, color:"#6b7280" } },
+        h("span", null, Math.round((totalAllocated/income)*100)+"% allocated"),
+        h("span", null, formatCurrency(remaining)+" unallocated")
+      )
+    ),
+    h("div", { style:{ display:"flex", gap:4, padding:"16px 24px 0" } },
+      ...["dashboard","bills","budget"].map(t =>
+        h("button", { key:t, onClick:()=>setTab(t), style:{ flex:1, padding:"10px 0", borderRadius:10, border:"none", cursor:"pointer", fontWeight:600, fontSize:13, textTransform:"capitalize", background:tab===t?"#5b8dee":"#1e2133", color:tab===t?"#fff":"#6b7280" } }, t)
+      )
+    ),
+    h("div", { style:{ padding:"20px 24px 0" } },
+      tab==="dashboard" && dashboard,
+      tab==="bills" && billsTab,
+      tab==="budget" && budgetTab
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
